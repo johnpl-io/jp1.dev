@@ -1,0 +1,10 @@
+baseURL = "https://jp1.dev/"
+title = "John Pluchino"
+languageCode = "en-us"
+disableKinds = ["taxonomy", "term", "RSS", "sitemap"]
+
+[params]
+  description = "John Pluchino, software engineer in New York."
+  resume = "/john_pluchino_resume.pdf"
+  github = "https://github.com/johnpl-io"
+  linkedin = "https://www.linkedin.com/in/john-pluchino-51482a286/"

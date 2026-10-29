@@ -1,0 +1,12 @@
+{{ define "main" }}
+<main>
+  <h1>{{ site.Title }}</h1>
+  <p class="sub">software engineer &middot; new york</p>
+  <hr>
+  <ul>
+    <li><a href="{{ site.Params.resume }}">resume</a> <span>pdf</span></li>
+    <li><a href="{{ site.Params.github }}">github</a> <span>johnpl-io</span></li>
+    <li><a href="{{ site.Params.linkedin }}">linkedin</a></li>
+  </ul>
+</main>
+{{ end }}

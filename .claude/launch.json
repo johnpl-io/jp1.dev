@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "hugo",
+      "runtimeExecutable": "podman",
+      "runtimeArgs": ["run", "--rm", "-v", "/home/john/resumesite:/project:Z", "--userns=keep-id", "-p", "1313:1313", "ghcr.io/gohugoio/hugo:v0.147.9", "server", "--bind", "0.0.0.0"],
+      "port": 1313
+    }
+  ]
+}
