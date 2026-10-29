@@ -1,0 +1,6 @@
+// Cloudflare Workers config: serve the Hugo build output as static assets.
+{
+  "name": "jp1-dev",
+  "compatibility_date": "2026-10-01",
+  "assets": { "directory": "./public" }
+}
