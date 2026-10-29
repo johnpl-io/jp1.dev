@@ -1,7 +1,11 @@
 // Phase portrait of the modular discriminant Delta on the Poincare disk, in ASCII.
 
+// The pattern itself is real text in a <pre>, so it stays sharp at any zoom.
+// The canvas on top only draws the cells lit by the pointer trail and ripples.
+const text = document.getElementById("bg-text") as HTMLPreElement;
 const canvas = document.getElementById("bg") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
+const FONT_FAMILY = "ui-monospace, Menlo, Consolas, monospace";
 const RAMP = " .,:;-=+*#%@";           // phase 0 -> 1
 const FPS = 12, SPEED = 0.003;         // phase shift per frame
 const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -37,10 +41,9 @@ let phase = new Float32Array(0);       // -1 marks cells outside the disk
 let color = "", hiColor = "";
 let timer: number | undefined;
 
-// The full pattern is drawn offscreen whenever the drift advances; each frame
-// copies it and redraws only the cells near the pointer, more strongly.
-const base = document.createElement("canvas");
-const bctx = base.getContext("2d")!;
+// Font size, and the baseline offset within a CH-tall line, so canvas glyphs
+// land exactly on top of the <pre>'s glyphs.
+let fontPx = 12, baseline = 10;
 
 // Pointer trail: cells the pointer passes over heat up, then cool off.
 // Fingers get a wider trail than the mouse.
@@ -64,7 +67,7 @@ let active: number[] = [];
 let lastX: number | null = null, lastY = 0, lastT = 0, raf = 0;
 
 function readColors(): void {
-  color = getComputedStyle(canvas).color;
+  color = getComputedStyle(text).color;
   const [r, g, b] = color.match(/[\d.]+/g)!;
   hiColor = `rgb(${r} ${g} ${b})`;
 }
@@ -73,8 +76,9 @@ function resize(): void {
   dpr = window.devicePixelRatio || 1;
   const W = canvas.clientWidth, H = canvas.clientHeight, tall = H > 1.3 * W;
   [CW, CH] = tall ? [6, 10] : [8, 13];
-  canvas.width = base.width = W * dpr;
-  canvas.height = base.height = H * dpr;
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  layoutText();
   cols = Math.ceil(W / CW);
   rows = Math.ceil(H / CH);
   phase = new Float32Array(cols * rows).fill(-1);
@@ -99,7 +103,28 @@ function resize(): void {
       phase[row * cols + col] = deltaPhase(tx, ty);
     }
   }
-  drawBase();
+  renderText();
+}
+
+// Size the <pre> so each character occupies exactly a CW x CH cell, and
+// measure where its baseline sits so canvas glyphs land on top of its glyphs.
+// Both are measured from the <pre> itself, not the canvas, since the two can
+// disagree by fractions of a pixel per character.
+function layoutText(): void {
+  fontPx = CH - 1;
+  text.style.font = `${fontPx}px ${FONT_FAMILY}`;
+  text.style.lineHeight = `${CH}px`;
+  text.style.letterSpacing = "0px";
+  const N = 64;
+  text.textContent = "M".repeat(N);
+  const marker = document.createElement("span");
+  marker.style.cssText = "display:inline-block;width:0;height:0;vertical-align:baseline";
+  text.append(marker);
+  const range = document.createRange();
+  range.selectNodeContents(text.firstChild!);
+  const advance = range.getBoundingClientRect().width / N;
+  baseline = marker.getBoundingClientRect().top - text.getBoundingClientRect().top;
+  text.style.letterSpacing = `${CW - advance}px`;
 }
 
 function glyph(i: number): string {
@@ -107,38 +132,31 @@ function glyph(i: number): string {
   return p < 0 ? " " : RAMP[Math.floor(((p + offset) % 1) * RAMP.length)];
 }
 
-function setupText(c: CanvasRenderingContext2D): void {
-  c.setTransform(dpr, 0, 0, dpr, 0, 0);
-  c.font = `${CH - 1}px ui-monospace, Menlo, Consolas, monospace`;
-  c.textBaseline = "top";
-}
-
-function drawBase(): void {
-  setupText(bctx);
-  bctx.clearRect(0, 0, base.width, base.height);
-  bctx.fillStyle = color;
+function renderText(): void {
+  let out = "";
   for (let row = 0; row < rows; row++) {
-    for (let col = 0; col < cols; col++) {
-      const ch = glyph(row * cols + col);
-      if (ch !== " ") bctx.fillText(ch, col * CW, row * CH);
-    }
+    let line = "";
+    for (let col = 0; col < cols; col++) line += glyph(row * cols + col);
+    out += line.trimEnd() + "\n";
   }
+  text.textContent = out;
   frame();
 }
 
 function frame(): void {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.drawImage(base, 0, 0);
   if (!active.length) return;
 
-  setupText(ctx);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.font = `${fontPx}px ${FONT_FAMILY}`;
+  ctx.textBaseline = "alphabetic";
   ctx.fillStyle = hiColor;
   for (const i of active) {
     const ch = glyph(i);
     if (ch === " ") continue;
     ctx.globalAlpha = heat[i] * TRAIL_ALPHA;
-    ctx.fillText(ch, (i % cols) * CW, Math.floor(i / cols) * CH);
+    ctx.fillText(ch, (i % cols) * CW, Math.floor(i / cols) * CH + baseline);
   }
   ctx.globalAlpha = 1;
 }
@@ -260,7 +278,7 @@ function onRelease(e: PointerEvent): void {
 
 function start(): void {
   if (still || timer !== undefined) return;
-  timer = setInterval(() => { offset = (offset + SPEED) % 1; drawBase(); }, 1000 / FPS);
+  timer = setInterval(() => { offset = (offset + SPEED) % 1; renderText(); }, 1000 / FPS);
 }
 
 function stop(): void {
@@ -288,6 +306,6 @@ addEventListener("resize", () => {
 });
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
   readColors();
-  drawBase();
+  frame();
 });
 document.addEventListener("visibilitychange", () => (document.hidden ? stop() : start()));

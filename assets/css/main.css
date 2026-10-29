@@ -14,6 +14,7 @@ body {
   margin: 0;
 }
 
+#bg-text,
 #bg {
   position: fixed;
   top: 0;
@@ -23,6 +24,12 @@ body {
      never resize (and stretch) the canvas */
   height: 100vh;
   height: 100lvh;
+  margin: 0;
+  overflow: hidden;
+  white-space: pre;
+  /* keep every glyph on the cell grid */
+  font-kerning: none;
+  font-variant-ligatures: none;
   z-index: -1;
   pointer-events: none;
   color: light-dark(rgb(0 0 0 / 0.2), rgb(255 255 255 / 0.17));

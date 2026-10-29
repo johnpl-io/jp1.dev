@@ -9,6 +9,7 @@
 {{ with resources.Get "css/main.css" | minify }}<style>{{ .Content | safeCSS }}</style>{{ end }}
 </head>
 <body>
+<pre id="bg-text" aria-hidden="true"></pre>
 <canvas id="bg" aria-hidden="true"></canvas>
 {{ block "main" . }}{{ end }}
 {{/* <p class="caption">arg &Delta;(&tau;) on the poincar&eacute; disk</p> */}}
