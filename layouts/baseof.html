@@ -11,7 +11,7 @@
 <body>
 <canvas id="bg" aria-hidden="true"></canvas>
 {{ block "main" . }}{{ end }}
-<p class="caption">arg &Delta;(&tau;) on the poincar&eacute; disk</p>
+{{/* <p class="caption">arg &Delta;(&tau;) on the poincar&eacute; disk</p> */}}
 {{ with resources.Get "ts/modular.ts" | js.Build (dict "minify" true "format" "iife" "target" "es2020") }}<script>{{ .Content | safeJS }}</script>{{ end }}
 </body>
 </html>
