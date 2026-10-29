@@ -43,7 +43,21 @@ const base = document.createElement("canvas");
 const bctx = base.getContext("2d")!;
 
 // Pointer trail: cells the pointer passes over heat up, then cool off.
-const TRAIL_R = 60, TRAIL_ALPHA = 0.75, HALF_LIFE_MS = 250;
+// Fingers get a wider trail than the mouse.
+const TRAIL_R_MOUSE = 80, TRAIL_R_TOUCH = 110, TRAIL_ALPHA = 0.75, HALF_LIFE_MS = 400;
+let trailR = TRAIL_R_MOUSE;
+
+// Tap/click ripple: a hyperbolic circle centered on the tap, growing at constant
+// hyperbolic speed. On screen it decelerates and thins toward the rim, which it
+// never reaches. It heats cells as it passes, leaving a fading wake.
+const RIPPLE_RHO_MAX = 4, RIPPLE_LIFE_S = 2.4;   // hyperbolic radius reached, lifetime
+const RIPPLE_SIGMA0 = 0.06, RIPPLE_SIGMA1 = 0.14; // ring softness at start / added by the end
+const RIPPLE_AMP = 0.85;
+let ripples: { wx: number; wy: number; t: number }[] = [];
+
+// Disk placement in CSS px, set by resize().
+let diskX = 0, diskY = 0, diskR = 1;
+
 let heat = new Float32Array(0);
 let hot = new Uint8Array(0);           // 1 if the cell is in `active`
 let active: number[] = [];
@@ -57,7 +71,7 @@ function readColors(): void {
 
 function resize(): void {
   dpr = window.devicePixelRatio || 1;
-  const W = innerWidth, H = innerHeight, tall = H > 1.3 * W;
+  const W = canvas.clientWidth, H = canvas.clientHeight, tall = H > 1.3 * W;
   [CW, CH] = tall ? [6, 10] : [8, 13];
   canvas.width = base.width = W * dpr;
   canvas.height = base.height = H * dpr;
@@ -71,7 +85,11 @@ function resize(): void {
   // Disk centered on screen (below the text on phones), mapped to the upper
   // half-plane by tau = (1 - iz) / (z - i): center -> i, top -> infinity,
   // bottom -> 0. Same map as Lowry-Duda, "Visualizing Modular Forms".
-  const R = 0.48 * Math.min(W, H), cx = W / 2, cy = tall ? H * 0.66 : H / 2;
+  const R = 0.48 * Math.min(W, H), cx = W / 2;
+  // On phones H is the toolbar-hidden height; keep the disk clear of the
+  // bottom toolbar when it's showing.
+  const cy = tall ? Math.min(H * 0.66, H - R - 110) : H / 2;
+  diskX = cx; diskY = cy; diskR = R;
   for (let row = 0; row < rows; row++) {
     for (let col = 0; col < cols; col++) {
       const zx = (col * CW + CW / 2 - cx) / R, zy = (cy - row * CH - CH / 2) / R;
@@ -97,7 +115,7 @@ function setupText(c: CanvasRenderingContext2D): void {
 
 function drawBase(): void {
   setupText(bctx);
-  bctx.clearRect(0, 0, innerWidth, innerHeight);
+  bctx.clearRect(0, 0, base.width, base.height);
   bctx.fillStyle = color;
   for (let row = 0; row < rows; row++) {
     for (let col = 0; col < cols; col++) {
@@ -125,20 +143,69 @@ function frame(): void {
   ctx.globalAlpha = 1;
 }
 
-// Heat the cells within TRAIL_R of (x, y), strongest at the center.
-function deposit(x: number, y: number): void {
-  const c0 = Math.max(0, Math.floor((x - TRAIL_R) / CW)), c1 = Math.min(cols - 1, Math.ceil((x + TRAIL_R) / CW));
-  const r0 = Math.max(0, Math.floor((y - TRAIL_R) / CH)), r1 = Math.min(rows - 1, Math.ceil((y + TRAIL_R) / CH));
+function heatCell(i: number, h: number): void {
+  if (h <= heat[i]) return;
+  heat[i] = h;
+  if (!hot[i]) { hot[i] = 1; active.push(i); }
+}
+
+// Visit the disk cells within distance `reach` of (x, y), passing each one's
+// distance from (x, y).
+function forCellsNear(x: number, y: number, reach: number, fn: (i: number, d: number) => void): void {
+  const c0 = Math.max(0, Math.floor((x - reach) / CW)), c1 = Math.min(cols - 1, Math.ceil((x + reach) / CW));
+  const r0 = Math.max(0, Math.floor((y - reach) / CH)), r1 = Math.min(rows - 1, Math.ceil((y + reach) / CH));
   for (let row = r0; row <= r1; row++) {
     for (let col = c0; col <= c1; col++) {
       const i = row * cols + col;
       if (phase[i] < 0) continue;
       const dx = col * CW + CW / 2 - x, dy = row * CH + CH / 2 - y;
-      const f = 1 - Math.sqrt(dx * dx + dy * dy) / TRAIL_R;
-      if (f <= 0) continue;
-      heat[i] = Math.max(heat[i], f * f);
-      if (!hot[i]) { hot[i] = 1; active.push(i); }
+      fn(i, Math.sqrt(dx * dx + dy * dy));
     }
+  }
+}
+
+// Heat the cells within trailR of (x, y), strongest at the center.
+function deposit(x: number, y: number): void {
+  forCellsNear(x, y, trailR, (i, d) => {
+    const f = 1 - d / trailR;
+    if (f > 0) heatCell(i, f * f);
+  });
+}
+
+// Hyperbolic distance between z and w in the Poincare disk.
+function hypDist(zx: number, zy: number, wx: number, wy: number): number {
+  const nx = zx - wx, ny = zy - wy;
+  const dr = 1 - (wx * zx + wy * zy), di = wx * zy - wy * zx;    // 1 - conj(w) z
+  const t = Math.min(Math.sqrt((nx * nx + ny * ny) / (dr * dr + di * di)), 0.999999);
+  return Math.log((1 + t) / (1 - t));                            // 2 artanh(t)
+}
+
+// Heat a soft band of cells around each ripple's current hyperbolic radius.
+function advanceRipples(now: number): void {
+  ripples = ripples.filter(rp => (now - rp.t) / 1000 < RIPPLE_LIFE_S);
+  for (const { wx, wy, t } of ripples) {
+    const p = (now - t) / 1000 / RIPPLE_LIFE_S;               // 0 -> 1 over its life
+    const rho = RIPPLE_RHO_MAX * p;
+    const sigma = RIPPLE_SIGMA0 + RIPPLE_SIGMA1 * p;
+    const amp = RIPPLE_AMP * (1 - p) ** 1.5;                  // dims into the background
+    if (amp < 0.03) continue;
+
+    // The hyperbolic circle of radius rho_out around w is a Euclidean circle;
+    // only cells inside its bounding box can be in the band.
+    const r = Math.tanh((rho + 2.5 * sigma) / 2), w2 = wx * wx + wy * wy, k = 1 - r * r * w2;
+    const ex = wx * (1 - r * r) / k, ey = wy * (1 - r * r) / k, er = r * (1 - w2) / k;
+    const x = diskX + ex * diskR, y = diskY - ey * diskR;
+    // Near the rim a fixed hyperbolic width shrinks below a character; keep
+    // the band at least ~1.5 cells wide on screen (hyperbolic length element
+    // is 2|dz| / (1 - |z|^2)).
+    const minW = 1.5 * CH / diskR;
+    forCellsNear(x, y, er * diskR + 3 * CH, (i) => {
+      const zx = ((i % cols) * CW + CW / 2 - diskX) / diskR;
+      const zy = (diskY - Math.floor(i / cols) * CH - CH / 2) / diskR;
+      const s = Math.max(sigma, minW * 2 / (1 - zx * zx - zy * zy));
+      const z = (hypDist(zx, zy, wx, wy) - rho) / s;
+      if (z * z < 6) heatCell(i, amp * Math.exp(-0.5 * z * z));
+    });
   }
 }
 
@@ -156,8 +223,9 @@ function tick(now: number): void {
       active.pop();
     }
   }
+  advanceRipples(now);
   frame();
-  if (active.length) raf = requestAnimationFrame(tick);
+  if (active.length || ripples.length) raf = requestAnimationFrame(tick);
 }
 
 function kick(): void {
@@ -166,11 +234,19 @@ function kick(): void {
 
 function onPointer(e: PointerEvent): void {
   const x = e.clientX, y = e.clientY;
+  trailR = e.pointerType === "mouse" ? TRAIL_R_MOUSE : TRAIL_R_TOUCH;
+  if (e.type === "pointerdown" && !still) {
+    // Taps outside the disk start from the nearest point just inside the rim.
+    let wx = (x - diskX) / diskR, wy = (diskY - y) / diskR;
+    const m = Math.hypot(wx, wy);
+    if (m > 0.9) { wx *= 0.9 / m; wy *= 0.9 / m; }
+    ripples.push({ wx, wy, t: performance.now() });
+  }
   if (lastX === null) {
     deposit(x, y);
   } else {
     // Fill in fast moves so the trail doesn't break into dots.
-    const dist = Math.hypot(x - lastX, y - lastY), steps = Math.max(1, Math.ceil(dist / (TRAIL_R / 3)));
+    const dist = Math.hypot(x - lastX, y - lastY), steps = Math.max(1, Math.ceil(dist / (trailR / 3)));
     for (let k = 1; k <= steps; k++) deposit(lastX + (x - lastX) * k / steps, lastY + (y - lastY) * k / steps);
   }
   lastX = x; lastY = y;
@@ -202,11 +278,12 @@ addEventListener("pointerup", onRelease, { passive: true });
 addEventListener("pointercancel", onRelease, { passive: true });
 document.documentElement.addEventListener("pointerleave", onRelease);
 
-// Mobile browsers fire resize when the address bar slides; skip those.
-let lastW = innerWidth, lastH = innerHeight;
+// The canvas is sized to the largest viewport, so mobile toolbars sliding
+// don't change it; rebuild only on real size changes (e.g. rotation).
+let lastW = canvas.clientWidth, lastH = canvas.clientHeight;
 addEventListener("resize", () => {
-  if (innerWidth === lastW && Math.abs(innerHeight - lastH) < 120) return;
-  lastW = innerWidth; lastH = innerHeight;
+  if (canvas.clientWidth === lastW && canvas.clientHeight === lastH) return;
+  lastW = canvas.clientWidth; lastH = canvas.clientHeight;
   resize();
 });
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
